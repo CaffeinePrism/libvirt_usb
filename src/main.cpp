@@ -18,45 +18,55 @@ bool name(pugi::xml_node& n) {
 	return n.attribute("hostdev").as_bool();
 }
 
-ProductIdSet getDomainInfo(std::string name) {
-    virConnectPtr conn = NULL; /* the hypervisor connection */
-    virDomainPtr dom = NULL;   /* the domain being checked */
+class LibvirtWrapper {
+    public:
+        LibvirtWrapper(std::string domain_name) {
+            std::ostringstream ess;
+
+            connection = virConnectOpen(NULL);
+            if (connection == NULL) {
+                ess	<< "Failed to connect to hypervisor" << std::endl;
+                throw std::runtime_error(ess.str());
+            }
+
+            /* Find the domain of the given id */
+            domain = virDomainLookupByName(connection, domain_name.c_str());
+            if (domain == NULL) {
+                ess << "Failed to find Domain " << domain_name << std::endl;
+                if (connection != NULL) {
+                    virConnectClose(connection);
+                }
+                throw std::runtime_error(ess.str());
+            }
+        }
+
+        ~LibvirtWrapper() {
+            if (domain != NULL) {
+                virDomainFree(domain);
+            }
+    		if (connection != NULL) {
+                virConnectClose(connection);
+            }
+        }
+
+        virConnectPtr getConnectPtr() { return connection; }
+        virDomainPtr getDomainPtr() { return domain; }
+
+    private:
+        virConnectPtr connection = NULL;
+        virDomainPtr domain = NULL;
+};
+
+ProductIdSet getDomainInfo(virDomainPtr dom) {
     virDomainInfo info;        /* the information being fetched */
     int ret;
     ProductIdSet ret_devices;
 
-	try {
-		/* NULL means connect to local Xen hypervisor */
-		conn = virConnectOpenReadOnly(NULL);
-		if (conn == NULL) {
-			std::ostringstream ess;
-			ess	<< "Failed to connect to hypervisor" << std::endl;
-			throw std::runtime_error(ess.str());
-		}
-
-		/* Find the domain of the given id */
-		dom = virDomainLookupByName(conn, name.c_str());
-		if (dom == NULL) {
-			std::ostringstream ess;
-			ess << "Failed to find Domain " << name << std::endl;
-			throw std::runtime_error(ess.str());
-		}
-
-		/* Get the information */
-		ret = virDomainGetInfo(dom, &info);
-		if (ret < 0) {
-			std::ostringstream ess;
-			ess << "Failed to get information for Domain " << name << std::endl;
-			throw std::runtime_error(ess.str());
-		}
-	}
-	catch (std::runtime_error& e) {
-		std::cerr << e.what() << std::endl;
-		if (dom != NULL)
-			virDomainFree(dom);
-		if (conn != NULL)
-			virConnectClose(conn);
-		throw;
+	ret = virDomainGetInfo(dom, &info);
+	if (ret < 0) {
+		std::ostringstream ess;
+		ess << "Failed to get information for Domain " << std::endl;
+		throw std::runtime_error(ess.str());
 	}
 
 	char* domxml = virDomainGetXMLDesc(dom, 0);
@@ -74,108 +84,72 @@ ProductIdSet getDomainInfo(std::string name) {
 			}
 		}
 	}
-    if (dom != NULL)
-        virDomainFree(dom);
-    if (conn != NULL)
-        virConnectClose(conn);
+
     return ret_devices;
 }
 
-USBDevices getHostUSBDevices() {
-    virConnectPtr conn = NULL; /* the hypervisor connection */
+USBDevices getHostUSBDevices(virConnectPtr conn) {
     virNodeDevicePtr* dev = nullptr;        /* the information being fetched */
     int ret;
     USBDevices ret_devices;
-    try {
-        /* NULL means connect to local Xen hypervisor */
-        conn = virConnectOpenReadOnly(NULL);
-        if (conn == NULL) {
-            std::ostringstream ess;
-            ess	<< "Failed to connect to hypervisor" << std::endl;
-            throw std::runtime_error(ess.str());
-        }
 
-        /* Find the domain of the given id */
-        ret = virConnectListAllNodeDevices(conn, &dev, VIR_CONNECT_LIST_NODE_DEVICES_CAP_USB_DEV);
+    /* Find the domain of the given id */
+    ret = virConnectListAllNodeDevices(conn, &dev, VIR_CONNECT_LIST_NODE_DEVICES_CAP_USB_DEV);
 
-        std::regex base_regex("(usb_(?!usb)[_\\d]+)"); // ignore linux hubs (pattern is usb_usb*)
-        std::cmatch match_results;
-        for(int i = 0; i < ret; ++i) {
-            const char* name = virNodeDeviceGetName(dev[i]);
-            if (std::regex_match(name, match_results, base_regex)) {
-                const char* xml = virNodeDeviceGetXMLDesc(dev[i], 0);
-                pugi::xml_document doc;
-            	pugi::xml_parse_result result = doc.load_string(xml);
-                if (result) {
-                    pugi::xml_node info = doc.child("device").child("capability");
-                    ProductId ids = ProductId(info.child("vendor").attribute("id").as_uint(), info.child("product").attribute("id").as_uint());
-                    ProductDescription description = ProductDescription(info.child("vendor").child_value(), info.child("product").child_value());
-                    if (!((ids.first == 0x8087) && (ids.second > 0x8000))) { // Intel USB hubs
-                        //printf("0x%04x:0x%04x :: %s, %s\n", ids.first, ids.second, description.first.c_str(), description.second.c_str());
-                        ret_devices.insert(ProductPair(ids, description));
-                    }
+    std::regex base_regex("(usb_(?!usb)[_\\d]+)"); // ignore linux hubs (pattern is usb_usb*)
+    std::cmatch match_results;
+    for(int i = 0; i < ret; ++i) {
+        const char* name = virNodeDeviceGetName(dev[i]);
+        if (std::regex_match(name, match_results, base_regex)) {
+            const char* xml = virNodeDeviceGetXMLDesc(dev[i], 0);
+            pugi::xml_document doc;
+        	pugi::xml_parse_result result = doc.load_string(xml);
+            if (result) {
+                pugi::xml_node info = doc.child("device").child("capability");
+                ProductId ids = ProductId(info.child("vendor").attribute("id").as_uint(), info.child("product").attribute("id").as_uint());
+                ProductDescription description = ProductDescription(info.child("vendor").child_value(), info.child("product").child_value());
+                if (!((ids.first == 0x8087) && (ids.second > 0x8000))) { // Intel USB hubs
+                    //printf("0x%04x:0x%04x :: %s, %s\n", ids.first, ids.second, description.first.c_str(), description.second.c_str());
+                    ret_devices.insert(ProductPair(ids, description));
                 }
             }
-            virNodeDeviceFree(dev[i]);
         }
-        delete[] dev;
+        virNodeDeviceFree(dev[i]);
+    }
+    delete[] dev;
 
-    }
-    catch (std::runtime_error& e) {
-        std::cerr << e.what() << std::endl;
-        if (conn != NULL)
-            virConnectClose(conn);
-        throw;
-    }
-    if (conn != NULL)
-        virConnectClose(conn);
     return ret_devices;
 }
 
-int attachDevice(std::string domain, unsigned int vendor, unsigned int product) {
-	virConnectPtr conn = NULL; /* the hypervisor connection */
-	virDomainPtr dom = NULL;   /* the domain being checked */
-	int ret = -1;
-	try {
-		/* NULL means connect to local Xen hypervisor */
-		conn = virConnectOpen(NULL);
-		if (conn == NULL) {
-			std::ostringstream ess;
-			ess	<< "Failed to connect to hypervisor" << std::endl;
-			throw std::runtime_error(ess.str());
-		}
+std::string buildDeviceString(unsigned int vendor, unsigned int product) {
+    std::string format_str = "<hostdev mode=\"subsystem\" type=\"usb\" managed=\"yes\"><source><vendor id=\"0x%04x\" /><product id=\"0x%04x\" /></source></hostdev>";
+    char str[128]; // len should only be 123 chars
+    sprintf(str, format_str.c_str(), vendor, product);
 
-		/* Find the domain of the given id */
-		dom = virDomainLookupByName(conn, domain.c_str());
-		if (dom == NULL) {
-			std::ostringstream ess;
-			ess << "Failed to find Domain " << domain << std::endl;
-			throw std::runtime_error(ess.str());
-		}
-		std::string format_str = "<hostdev mode=\"subsystem\" type=\"usb\" managed=\"yes\"><source><vendor id=\"0x%04x\" /><product id=\"0x%04x\" /></source></hostdev>";
-		int len = snprintf(NULL, 0, format_str.c_str(), vendor, product);
-		char str[len];
-		snprintf(str, len+1, format_str.c_str(), vendor, product);
-		ret = virDomainAttachDeviceFlags(dom, str, VIR_DOMAIN_AFFECT_LIVE);
-	}
-	catch (std::runtime_error& e) {
-		std::cerr << e.what() << std::endl;
-		if (dom != NULL)
-			virDomainFree(dom);
-		if (conn != NULL)
-			virConnectClose(conn);
-		throw;
-	}
-	if (dom != NULL)
-		virDomainFree(dom);
-	if (conn != NULL)
-		virConnectClose(conn);
+    return std::string(str);
+}
+
+int attachDevice(virDomainPtr dom, unsigned int vendor, unsigned int product) {
+	int ret = -1;
+	ret = virDomainAttachDeviceFlags(dom, buildDeviceString(vendor, product).c_str(), VIR_DOMAIN_AFFECT_LIVE);
+
+	return ret;
+}
+
+int detachDevice(virDomainPtr dom, unsigned int vendor, unsigned int product) {
+	int ret = -1;
+	ret = virDomainDetachDeviceFlags(dom, buildDeviceString(vendor, product).c_str(), VIR_DOMAIN_AFFECT_LIVE);
+
 	return ret;
 }
 
 int main(int argc, char** argv) {
-    ProductIdSet attached_devices = getDomainInfo("win10");
-    USBDevices devices = getHostUSBDevices();
+    LibvirtWrapper wrapper{"win10"};
+    virConnectPtr conn = wrapper.getConnectPtr();
+    virDomainPtr dom = wrapper.getDomainPtr();
+
+    ProductIdSet attached_devices = getDomainInfo(dom);
+    USBDevices devices = getHostUSBDevices(conn);
     #define GREEN "\033[32m"
     #define RED "\033[31m"
     #define RESET "\033[0m"
@@ -192,7 +166,8 @@ int main(int argc, char** argv) {
     }
     std::cout << RESET;
     if (argc == 3) {
-        attachDevice("win10", std::strtoul(argv[1], nullptr, 16), std::strtoul(argv[2], nullptr, 16));
+        int ret = attachDevice(dom, std::strtoul(argv[1], nullptr, 16), std::strtoul(argv[2], nullptr, 16));
+        std::cout << "attachDevice returned: " << ret << std::endl;
     }
     return(0);
 }
