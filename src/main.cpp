@@ -85,6 +85,8 @@ ProductIdSet getDomainInfo(virDomainPtr dom) {
 		}
 	}
 
+    free(domxml);
+
     return ret_devices;
 }
 
@@ -101,7 +103,7 @@ USBDevices getHostUSBDevices(virConnectPtr conn) {
     for(int i = 0; i < ret; ++i) {
         const char* name = virNodeDeviceGetName(dev[i]);
         if (std::regex_match(name, match_results, base_regex)) {
-            const char* xml = virNodeDeviceGetXMLDesc(dev[i], 0);
+            char* xml = virNodeDeviceGetXMLDesc(dev[i], 0);
             pugi::xml_document doc;
         	pugi::xml_parse_result result = doc.load_string(xml);
             if (result) {
@@ -113,6 +115,7 @@ USBDevices getHostUSBDevices(virConnectPtr conn) {
                     ret_devices.insert(ProductPair(ids, description));
                 }
             }
+            free(xml);
         }
         virNodeDeviceFree(dev[i]);
     }
