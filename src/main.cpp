@@ -169,7 +169,16 @@ int main(int argc, char** argv) {
     }
     std::cout << RESET;
     if (argc == 3) {
-        int ret = attachDevice(dom, std::strtoul(argv[1], nullptr, 16), std::strtoul(argv[2], nullptr, 16));
+        unsigned int vendor_id = std::strtoul(argv[1], nullptr, 16);
+        unsigned int product_id = std::strtoul(argv[2], nullptr, 16);
+
+        // cleanup old items
+        for (ProductId id : attached_devices) {
+            if (id.first == vendor_id && id.second == product_id) {
+                detachDevice(dom, vendor_id, product_id);
+            }
+        }
+        int ret = attachDevice(dom, vendor_id, product_id);
         std::cout << "attachDevice returned: " << ret << std::endl;
     }
     return(0);
