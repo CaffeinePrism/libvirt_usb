@@ -17,6 +17,7 @@ SRCS = $(shell find $(SRCDIR) -name '*.cpp')
 OBJS = $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%.o, $(SRCS))
 EXEC = $(BINDIR)/main.out
 
+$(shell mkdir -p $(BINDIR))
 all: $(SRCS) $(EXEC)
 
 $(EXEC): $(OBJS)
