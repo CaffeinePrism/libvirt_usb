@@ -18,6 +18,12 @@ bool name(pugi::xml_node& n) {
 	return n.attribute("hostdev").as_bool();
 }
 
+#define GREEN       "\033[32m"
+#define RED         "\033[31m"
+#define RESET       "\033[0m"
+#define BOLD        "\033[1m"
+#define UNDERLINE   "\033[4m"
+
 class LibvirtWrapper {
     public:
         LibvirtWrapper(std::string domain_name) {
@@ -78,7 +84,7 @@ ProductIdSet getDomainInfo(virDomainPtr dom) {
 		{
 			if (strcmp(n.attribute("type").value(),"usb") == 0) {
                 ProductId id = ProductId(n.child("source").child("vendor").attribute("id").as_uint(), n.child("source").child("product").attribute("id").as_uint());
-                printf(">> 0x%04x:0x%04x\n", id.first, id.second);
+                printf(BOLD UNDERLINE ">> 0x%04x:0x%04x" RESET "\n", id.first, id.second);
 				n.print(std::cout);
                 ret_devices.insert(id);
 			}
@@ -153,9 +159,6 @@ int main(int argc, char** argv) {
 
     ProductIdSet attached_devices = getDomainInfo(dom);
     USBDevices devices = getHostUSBDevices(conn);
-    #define GREEN "\033[32m"
-    #define RED "\033[31m"
-    #define RESET "\033[0m"
 
     std::cout << RED << " + " << RESET << ": Device already attached to domain" << std::endl;
     std::cout << GREEN << " - " << RESET << ": Device not attached to domain" << std::endl << std::endl;
